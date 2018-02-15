@@ -15,8 +15,8 @@ pub struct Cache<S>
           S::Request: Hash + Eq
 {
     inner: S,
-    duration: Duration,
-    cache: Mutex<LruCache<S::Request, (Instant, Shared<S::Future>)>>
+    duration: Option<Duration>,
+    cache: Mutex<LruCache<S::Request, (Option<Instant>, Shared<S::Future>)>>
 }
 
 impl<S> Debug for Cache<S>
@@ -35,7 +35,7 @@ impl<S> Cache<S>
     where S: Service<Error=Error>,
           S::Request: Hash + Eq
 {
-    pub fn new(service: S, duration: Duration, capacity: usize) -> Cache<S> {
+    pub fn new(service: S, duration: Option<Duration>, capacity: usize) -> Cache<S> {
         Cache {
             inner: service,
             duration: duration,
@@ -57,14 +57,22 @@ impl<S> Service for Cache<S>
         let now = Instant::now();
         let mut cache = self.cache.lock().expect("lock poisoned");
         if let Some(&mut (valid_until, ref shared_future)) = cache.get_mut(&req) {
-            if valid_until > now {
-                if let Some(Ok(_)) = shared_future.peek() {
-                    return Cached(shared_future.clone());
+            if let Some(Ok(_)) = shared_future.peek() {
+                match valid_until {
+                    None => {
+                        return Cached(shared_future.clone())
+                    },
+                    Some(instant) => {
+                        if instant > now {
+                            return Cached(shared_future.clone());
+                        }
+                    }
                 }
             }
         }
         let shared_future = self.inner.call(req.clone()).shared();
-        cache.insert(req, (now + self.duration, shared_future.clone()));
+        let valid_until = self.duration.map(|duration| now + duration);
+        cache.insert(req, (valid_until, shared_future.clone()));
         Cached(shared_future)
     }
 }

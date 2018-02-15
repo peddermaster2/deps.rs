@@ -38,14 +38,15 @@ pub struct Engine {
     git_ls_remote: Arc<LsRemote<HttpsConnector<HttpConnector>>>,
     query_crate: Arc<Cache<QueryCrate<HttpClient>>>,
     get_popular_repos: Arc<Cache<GetPopularRepos<HttpClient>>>,
-    retrieve_file_at_path: Arc<RetrieveFileAtPath<HttpClient>>
+    retrieve_file_at_path: Arc<Cache<RetrieveFileAtPath<HttpClient>>>
 }
 
 impl Engine {
     pub fn new(client: Client<HttpsConnector<HttpConnector>>, logger: Logger) -> Engine {
         let git_ls_remote = LsRemote::new(client.clone());
-        let query_crate = Cache::new(QueryCrate(client.clone()), Duration::from_secs(300), 500);
-        let get_popular_repos = Cache::new(GetPopularRepos(client.clone()), Duration::from_secs(10), 1);
+        let query_crate = Cache::new(QueryCrate(client.clone()), Some(Duration::from_secs(300)), 500);
+        let get_popular_repos = Cache::new(GetPopularRepos(client.clone()), Some(Duration::from_secs(10)), 1);
+        let retrieve_file_at_path = Cache::new(RetrieveFileAtPath(client.clone()), None, 500);
 
         Engine {
             client: client.clone(), logger,
@@ -53,7 +54,7 @@ impl Engine {
             git_ls_remote: Arc::new(git_ls_remote),
             query_crate: Arc::new(query_crate),
             get_popular_repos: Arc::new(get_popular_repos),
-            retrieve_file_at_path: Arc::new(RetrieveFileAtPath(client))
+            retrieve_file_at_path: Arc::new(retrieve_file_at_path)
         }
     }
 }
@@ -131,6 +132,7 @@ impl Engine {
     {
         let manifest_path = path.join(RelativePath::new("Cargo.toml"));
         self.retrieve_file_at_path.call((repo_path.clone(), oid.clone(), manifest_path))
+            .from_err().map(|item| item.clone())
     }
 
     fn find_head_oid(&self, repo_path: &RepoPath) ->
