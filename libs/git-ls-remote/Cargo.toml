@@ -1,0 +1,11 @@
+[package]
+name = "git-ls-remote"
+version = "0.1.0"
+authors = ["Sam Rijs <srijs@airpost.net>"]
+
+[dependencies]
+failure = "0.1.1"
+futures = "0.1.18"
+hyper = "0.11.15"
+itertools = "0.7.3"
+tokio-service = "0.1.0"

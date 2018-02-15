@@ -5,6 +5,7 @@ use std::time::{Duration, Instant};
 use failure::Error;
 use futures::Future;
 use futures::future::join_all;
+use git_ls_remote::{LsRemote, LsRemoteRequest, ObjectId};
 use hyper::Client;
 use hyper::client::HttpConnector;
 use hyper_tls::HttpsConnector;
@@ -34,6 +35,7 @@ pub struct Engine {
     client: HttpClient,
     logger: Logger,
 
+    git_ls_remote: Arc<LsRemote<HttpsConnector<HttpConnector>>>,
     query_crate: Arc<Cache<QueryCrate<HttpClient>>>,
     get_popular_repos: Arc<Cache<GetPopularRepos<HttpClient>>>,
     retrieve_file_at_path: Arc<RetrieveFileAtPath<HttpClient>>
@@ -41,12 +43,14 @@ pub struct Engine {
 
 impl Engine {
     pub fn new(client: Client<HttpsConnector<HttpConnector>>, logger: Logger) -> Engine {
+        let git_ls_remote = LsRemote::new(client.clone());
         let query_crate = Cache::new(QueryCrate(client.clone()), Duration::from_secs(300), 500);
         let get_popular_repos = Cache::new(GetPopularRepos(client.clone()), Duration::from_secs(10), 1);
 
         Engine {
             client: client.clone(), logger,
 
+            git_ls_remote: Arc::new(git_ls_remote),
             query_crate: Arc::new(query_crate),
             get_popular_repos: Arc::new(get_popular_repos),
             retrieve_file_at_path: Arc::new(RetrieveFileAtPath(client))
@@ -87,24 +91,26 @@ impl Engine {
         impl Future<Item=AnalyzeDependenciesOutcome, Error=Error>
     {
         let start = Instant::now();
-
-        let entry_point = RelativePath::new("/").to_relative_path_buf();
-        let manifest_future = CrawlManifestFuture::new(self, repo_path, entry_point);
-
         let engine = self.clone();
-        manifest_future.and_then(move |manifest_output| {
-            let futures = manifest_output.crates.into_iter().map(move |(crate_name, deps)| {
-                let analyzed_deps_future = AnalyzeDependenciesFuture::new(&engine, deps);
 
-                analyzed_deps_future.map(move |analyzed_deps| (crate_name, analyzed_deps))
-            });
+        self.find_head_oid(&repo_path).and_then(move |oid| {
+            let entry_point = RelativePath::new("/").to_relative_path_buf();
+            let manifest_future = CrawlManifestFuture::new(&engine, repo_path, oid, entry_point);
 
-            join_all(futures).map(move |crates| {
-                let duration = start.elapsed();
+            manifest_future.and_then(move |manifest_output| {
+                let futures = manifest_output.crates.into_iter().map(move |(crate_name, deps)| {
+                    let analyzed_deps_future = AnalyzeDependenciesFuture::new(&engine, deps);
 
-                AnalyzeDependenciesOutcome {
-                    crates, duration
-                }
+                    analyzed_deps_future.map(move |analyzed_deps| (crate_name, analyzed_deps))
+                });
+
+                join_all(futures).map(move |crates| {
+                    let duration = start.elapsed();
+
+                    AnalyzeDependenciesOutcome {
+                        crates, duration
+                    }
+                })
             })
         })
     }
@@ -120,11 +126,28 @@ impl Engine {
         })
     }
 
-    fn retrieve_manifest_at_path(&self, repo_path: &RepoPath, path: &RelativePathBuf) ->
+    fn retrieve_manifest_at_path(&self, repo_path: &RepoPath, oid: &ObjectId, path: &RelativePathBuf) ->
         impl Future<Item=String, Error=Error>
     {
         let manifest_path = path.join(RelativePath::new("Cargo.toml"));
-        self.retrieve_file_at_path.call((repo_path.clone(), manifest_path))
+        self.retrieve_file_at_path.call((repo_path.clone(), oid.clone(), manifest_path))
+    }
+
+    fn find_head_oid(&self, repo_path: &RepoPath) ->
+        impl Future<Item=ObjectId, Error=Error>
+    {
+        let url = format!("{}/{}/{}.git",
+            repo_path.site.to_base_uri(),
+            repo_path.qual.as_ref(),
+            repo_path.name.as_ref());
+        let req = LsRemoteRequest {
+            https_clone_url: url
+        };
+        self.git_ls_remote.call(req).from_err().and_then(|refs| {
+            refs.into_iter().find(|r| r.name == "HEAD")
+                .map(|r| r.oid)
+                .ok_or(format_err!("HEAD ref not found"))
+        })
     }
 }
 

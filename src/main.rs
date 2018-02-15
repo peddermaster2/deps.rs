@@ -6,6 +6,7 @@
 extern crate badge;
 #[macro_use] extern crate failure;
 #[macro_use] extern crate futures;
+extern crate git_ls_remote;
 extern crate hyper;
 extern crate hyper_tls;
 #[macro_use] extern crate lazy_static;

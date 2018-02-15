@@ -28,5 +28,9 @@ toml = "0.4.5"
 version = "0.2.0"
 path = "libs/badge"
 
+[dependencies.git-ls-remote]
+version = "0.1.0"
+path = "libs/git-ls-remote"
+
 [build-dependencies]
 sass-rs = "0.2.1"

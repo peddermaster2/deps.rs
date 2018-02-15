@@ -1,5 +1,6 @@
 use failure::Error;
 use futures::{Future, IntoFuture, Stream, future};
+use git_ls_remote::ObjectId;
 use hyper::{Error as HyperError, Method, Request, Response};
 use relative_path::RelativePathBuf;
 use tokio_service::Service;
@@ -19,7 +20,7 @@ impl<S> Service for RetrieveFileAtPath<S>
     where S: Service<Request=Request, Response=Response, Error=HyperError> + Clone + 'static,
           S::Future: 'static
 {
-    type Request = (RepoPath, RelativePathBuf);
+    type Request = (RepoPath, ObjectId, RelativePathBuf);
     type Response = String;
     type Error = Error;
     type Future = Box<Future<Item=Self::Response, Error=Self::Error>>;
@@ -27,16 +28,16 @@ impl<S> Service for RetrieveFileAtPath<S>
     fn call(&self, req: Self::Request) -> Self::Future {
         let service = self.0.clone();
 
-        let (repo_path, path) = req;
+        let (repo_path, oid, path) = req;
         let uri = match &repo_path.site {
             &RepoSite::Github => {
-                github::get_manifest_uri(&repo_path, &path)
+                github::get_manifest_uri(&repo_path, &oid, &path)
             },
             &RepoSite::Gitlab => {
-                gitlab::get_manifest_uri(&repo_path, &path)
+                gitlab::get_manifest_uri(&repo_path, &oid, &path)
             },
             &RepoSite::Bitbucket => {
-                bitbucket::get_manifest_uri(&repo_path, &path)
+                bitbucket::get_manifest_uri(&repo_path, &oid, &path)
             }
         };
         let uri_future = uri.into_future().from_err();

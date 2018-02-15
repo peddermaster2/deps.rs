@@ -1,5 +1,6 @@
 use failure::Error;
 use futures::{Future, IntoFuture, Stream, future};
+use git_ls_remote::ObjectId;
 use hyper::{Error as HyperError, Method, Request, Response, Uri};
 use hyper::header::UserAgent;
 use relative_path::RelativePathBuf;
@@ -11,12 +12,13 @@ use ::models::repo::{Repository, RepoPath};
 const GITHUB_API_BASE_URI: &'static str = "https://api.github.com";
 const GITHUB_USER_CONTENT_BASE_URI: &'static str = "https://raw.githubusercontent.com";
 
-pub fn get_manifest_uri(repo_path: &RepoPath, path: &RelativePathBuf) -> Result<Uri, Error> {
+pub fn get_manifest_uri(repo_path: &RepoPath, oid: &ObjectId, path: &RelativePathBuf) -> Result<Uri, Error> {
     let path_str: &str = path.as_ref();
-    Ok(format!("{}/{}/{}/HEAD/{}",
+    Ok(format!("{}/{}/{}/{}/{}",
         GITHUB_USER_CONTENT_BASE_URI,
         repo_path.qual.as_ref(),
         repo_path.name.as_ref(),
+        oid.as_ref(),
         path_str
     ).parse::<Uri>()?)
 }
