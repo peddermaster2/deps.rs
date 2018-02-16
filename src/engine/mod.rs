@@ -145,10 +145,8 @@ impl Engine {
         let req = LsRemoteRequest {
             https_clone_url: url
         };
-        self.git_ls_remote.call(req).from_err().and_then(|refs| {
-            refs.into_iter().find(|r| r.name == "HEAD")
-                .map(|r| r.oid)
-                .ok_or(format_err!("HEAD ref not found"))
+        self.git_ls_remote.call(req).from_err().and_then(|head_ref| {
+            head_ref.ok_or(format_err!("HEAD ref not found"))
         })
     }
 }
