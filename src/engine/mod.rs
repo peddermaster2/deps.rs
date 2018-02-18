@@ -9,6 +9,7 @@ use hyper::Client;
 use hyper::client::HttpConnector;
 use hyper_tls::HttpsConnector;
 use relative_path::{RelativePath, RelativePathBuf};
+use rustsec::db::AdvisoryDatabase;
 use semver::VersionReq;
 use slog::Logger;
 use tokio_service::Service;
@@ -23,7 +24,8 @@ use ::models::crates::{CrateName, CratePath, CrateRelease, AnalyzedDependencies}
 
 use ::interactors::crates::{QueryCrate, GetPopularCrates};
 use ::interactors::RetrieveFileAtPath;
-use ::interactors::github::{GetPopularRepos};
+use ::interactors::github::GetPopularRepos;
+use ::interactors::rustsec::FetchAdvisoryDatabase;
 
 use self::futures::AnalyzeDependenciesFuture;
 use self::futures::CrawlManifestFuture;
@@ -38,7 +40,8 @@ pub struct Engine {
     query_crate: Arc<Cache<QueryCrate<HttpClient>>>,
     get_popular_crates: Arc<Cache<GetPopularCrates<HttpClient>>>,
     get_popular_repos: Arc<Cache<GetPopularRepos<HttpClient>>>,
-    retrieve_file_at_path: Arc<RetrieveFileAtPath<HttpClient>>
+    retrieve_file_at_path: Arc<RetrieveFileAtPath<HttpClient>>,
+    fetch_advisory_db: Arc<Cache<FetchAdvisoryDatabase<HttpClient>>>
 }
 
 impl Engine {
@@ -46,6 +49,7 @@ impl Engine {
         let query_crate = Cache::new(QueryCrate(client.clone()), Duration::from_secs(300), 500);
         let get_popular_crates = Cache::new(GetPopularCrates(client.clone()), Duration::from_secs(10), 1);
         let get_popular_repos = Cache::new(GetPopularRepos(client.clone()), Duration::from_secs(10), 1);
+        let fetch_advisory_db =  Cache::new(FetchAdvisoryDatabase(client.clone()), Duration::from_secs(300), 1);
 
         Engine {
             client: client.clone(), logger,
@@ -53,7 +57,8 @@ impl Engine {
             query_crate: Arc::new(query_crate),
             get_popular_crates: Arc::new(get_popular_crates),
             get_popular_repos: Arc::new(get_popular_repos),
-            retrieve_file_at_path: Arc::new(RetrieveFileAtPath(client))
+            retrieve_file_at_path: Arc::new(RetrieveFileAtPath(client)),
+            fetch_advisory_db: Arc::new(fetch_advisory_db)
         }
     }
 }
@@ -66,6 +71,10 @@ pub struct AnalyzeDependenciesOutcome {
 impl AnalyzeDependenciesOutcome {
     pub fn any_outdated(&self) -> bool {
         self.crates.iter().any(|&(_, ref deps)| deps.any_outdated())
+    }
+
+    pub fn any_insecure(&self) -> bool {
+        self.crates.iter().any(|&(_, ref deps)| deps.count_insecure() > 0)
     }
 
     pub fn outdated_ratio(&self) -> (usize, usize) {
@@ -105,7 +114,7 @@ impl Engine {
         let engine = self.clone();
         manifest_future.and_then(move |manifest_output| {
             let futures = manifest_output.crates.into_iter().map(move |(crate_name, deps)| {
-                let analyzed_deps_future = AnalyzeDependenciesFuture::new(&engine, deps);
+                let analyzed_deps_future = AnalyzeDependenciesFuture::new(engine.clone(), deps);
 
                 analyzed_deps_future.map(move |analyzed_deps| (crate_name, analyzed_deps))
             });
@@ -132,7 +141,7 @@ impl Engine {
             match query_response.releases.iter().find(|release| release.version == crate_path.version) {
                 None => future::Either::A(future::err(format_err!("could not find crate release with version {}", crate_path.version))),
                 Some(release) => {
-                    let analyzed_deps_future = AnalyzeDependenciesFuture::new(&engine, release.deps.clone());
+                    let analyzed_deps_future = AnalyzeDependenciesFuture::new(engine.clone(), release.deps.clone());
 
                     future::Either::B(analyzed_deps_future.map(move |analyzed_deps| {
                         let crates = vec![(crate_path.name, analyzed_deps)].into_iter().collect();
@@ -174,6 +183,12 @@ impl Engine {
     {
         let manifest_path = path.join(RelativePath::new("Cargo.toml"));
         self.retrieve_file_at_path.call((repo_path.clone(), manifest_path))
+    }
+
+    fn fetch_advisory_db(&self) ->
+        impl Future<Item=Arc<AdvisoryDatabase>, Error=Error>
+    {
+        self.fetch_advisory_db.call(()).from_err().map(|db| db.clone())
     }
 }
 
